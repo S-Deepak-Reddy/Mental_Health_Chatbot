@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Student Mental Health Chatbot</title>
+  <style>
+    body { font-family: Arial; padding: 20px; max-width: 600px; margin: auto; }
+    textarea { width: 100%; height: 100px; margin-top: 10px; }
+    input, button { padding: 10px; margin-top: 10px; width: 100%; }
+    pre { background: #f3f3f3; padding: 10px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h2>Mental Health Chatbot</h2>
+  <input id="student" placeholder="Enter your name" />
+  <textarea id="message" placeholder="How are you feeling today?"></textarea>
+  <button onclick="sendMessage()">Send</button>
+  <pre id="response"></pre>
+
+  <script>
+    async function sendMessage() {
+      const student = document.getElementById('student').value;
+      const message = document.getElementById('message').value;
+      const res = await fetch("/chat", {
+        method: "POST",
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({student, message})
+      });
+      const data = await res.json();
+      document.getElementById('response').innerText =
+        `Chatbot: ${data.bot_response}\n\nSentiment: ${data.sentiment}`;
+    }
+  </script>
+</body>
+</html>
