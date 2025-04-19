@@ -1,0 +1,307 @@
+<!-- templates/faculty_dashboard.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Faculty Dashboard - Mental Health Monitor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.css">
+    <style>
+        .alert-indicator {
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+        .status-good {
+            background-color: #28a745;
+        }
+        .status-warning {
+            background-color: #ffc107;
+        }
+        .status-alert {
+            background-color: #dc3545;
+        }
+        .sentiment-chart {
+            height: 150px;
+        }
+        .student-details {
+            display: none;
+            padding: 1rem;
+            background-color: #f8f9fa;
+            border-radius: 0.25rem;
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="/">Mental Health Monitor</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <span class="nav-link">Welcome, {{ faculty.name }}</span>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/logout">Logout</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container my-4">
+        <div class="row mb-4">
+            <div class="col">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Student Mental Health Overview</h5>
+                        <button class="btn btn-sm btn-outline-primary" onclick="refreshData()">Refresh Data</button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Student Name</th>
+                                        <th>Status</th>
+                                        <th>Latest Sentiment</th>
+                                        <th>Sentiment Distribution</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="studentsTable">
+                                    {% for student in students %}
+                                    <tr>
+                                        <td>{{ student.name }}</td>
+                                        <td>
+                                            {% if student.latest_score > 7 %}
+                                            <span class="alert-indicator status-good"></span> Good
+                                            {% elif student.latest_score > 4 %}
+                                            <span class="alert-indicator status-warning"></span> Neutral
+                                            {% else %}
+                                            <span class="alert-indicator status-alert"></span> Needs Attention
+                                            {% endif %}
+                                        </td>
+                                        <td>{{ student.latest_sentiment|capitalize }}</td>
+                                        <td>
+                                            <canvas id="chart{{ student.student_id }}" class="sentiment-chart"></canvas>
+                                        </td>
+                                        <td>
+                                            <button class="btn btn-sm btn-primary" onclick="viewStudentDetails('{{ student.student_id }}')">View Details</button>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col">
+                <div id="studentDetails" class="student-details">
+                    <h4 id="detailsStudentName"></h4>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="card mb-3">
+                                <div class="card-header">
+                                    <h5 class="mb-0">Conversation History</h5>
+                                </div>
+                                <div class="card-body">
+                                    <div id="conversationHistory" style="max-height: 300px; overflow-y: auto;">
+                                        <!-- Conversation history will be loaded here -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h5 class="mb-0">Mood Trend</h5>
+                                </div>
+                                <div class="card-body">
+                                    <canvas id="moodTrendChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            loadStudentData();
+        });
+        
+        function loadStudentData() {
+            fetch('/api/faculty/student_data')
+            .then(response => response.json())
+            .then(data => {
+                data.forEach(student => {
+                    // Create the sentiment distribution chart for each student
+                    createSentimentDistributionChart(student);
+                });
+            })
+            .catch(error => {
+                console.error('Error loading student data:', error);
+            });
+        }
+        
+        function createSentimentDistributionChart(student) {
+            const ctx = document.getElementById(`chart${student.student_id}`).getContext('2d');
+            new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Positive', 'Neutral', 'Negative'],
+                    datasets: [{
+                        data: [
+                            student.sentiment_distribution.positive,
+                            student.sentiment_distribution.neutral,
+                            student.sentiment_distribution.negative
+                        ],
+                        backgroundColor: [
+                            '#28a745',
+                            '#ffc107',
+                            '#dc3545'
+                        ],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+        }
+        
+        function viewStudentDetails(studentId) {
+            // Show student details section
+            document.getElementById('studentDetails').style.display = 'block';
+            
+            // Get student name
+            const studentRow = document.querySelector(`tr[onclick*="${studentId}"]`);
+            const studentName = studentRow ? studentRow.cells[0].textContent : 'Student';
+            document.getElementById('detailsStudentName').textContent = `${studentName}'s Details`;
+            
+            // Load conversation history
+            fetch(`/api/student/history?student_id=${studentId}`)
+            .then(response => response.json())
+            .then(data => {
+                const historyContainer = document.getElementById('conversationHistory');
+                historyContainer.innerHTML = '';
+                
+                // Display last 10 messages
+                const recentMessages = data.slice(-10);
+                recentMessages.forEach(chat => {
+                    // Student message
+                    const studentMsg = document.createElement('div');
+                    studentMsg.className = 'mb-2';
+                    studentMsg.innerHTML = `<strong>${studentName}:</strong> ${chat.student_message}`;
+                    historyContainer.appendChild(studentMsg);
+                    
+                    // Chatbot response
+                    const botMsg = document.createElement('div');
+                    botMsg.className = 'mb-3 ps-3';
+                    botMsg.innerHTML = `<strong>Chatbot:</strong> ${chat.chatbot_response}`;
+                    historyContainer.appendChild(botMsg);
+                });
+                
+                // Create mood trend chart
+                createMoodTrendChart(data);
+            })
+            .catch(error => {
+                console.error('Error loading student history:', error);
+            });
+        }
+        
+        function createMoodTrendChart(data) {
+            // Group data by day and calculate average sentiment
+            const dateGroups = {};
+            data.forEach(item => {
+                const date = item.timestamp.split(' ')[0]; // Extract date part
+                if (!dateGroups[date]) {
+                    dateGroups[date] = [];
+                }
+                dateGroups[date].push(item.sentiment_score);
+            });
+            
+            const labels = [];
+            const sentimentData = [];
+            
+            for (const date in dateGroups) {
+                labels.push(date);
+                const scores = dateGroups[date];
+                const average = scores.reduce((a, b) => a + b, 0) / scores.length;
+                sentimentData.push(average);
+            }
+            
+            // Create chart
+            const ctx = document.getElementById('moodTrendChart').getContext('2d');
+            if (window.moodChart) {
+                window.moodChart.destroy();
+            }
+            
+            window.moodChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Mood Score',
+                        data: sentimentData,
+                        backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        borderWidth: 2,
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 10,
+                            title: {
+                                display: true,
+                                text: 'Mood Score'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Date'
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Mood Trend'
+                        }
+                    }
+                }
+            });
+        }
+        
+        function refreshData() {
+            location.reload();
+        }
+    </script>
+</body>
+</html>

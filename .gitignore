@@ -1,0 +1,15 @@
+# Exclude sensitive environment and API keys
+.env
+serviceAccountKey.json
+
+# Exclude Python cache and virtual environment files
+__pycache__/
+*.py[cod]
+venv/
+
+# Exclude Chroma database (if it's generated data)
+chroma_db/
+
+# General OS-generated files
+.DS_Store
+Thumbs.db
