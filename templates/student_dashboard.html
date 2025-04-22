@@ -6,10 +6,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Student Dashboard - Mental Health Monitor</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.css">
     <style>
         .chat-container {
-            height: 400px;
+            height: 500px;
             overflow-y: auto;
             border: 1px solid #dee2e6;
             border-radius: 0.25rem;
@@ -32,39 +31,6 @@
             background-color: #e9ecef;
             color: #212529;
             margin-right: auto;
-        }
-        .sentiment-indicator {
-            display: inline-block;
-            width: 15px;
-            height: 15px;
-            border-radius: 50%;
-            margin-right: 5px;
-        }
-        .sentiment-positive {
-            background-color: #28a745;
-        }
-        .sentiment-neutral {
-            background-color: #ffc107;
-        }
-        .sentiment-negative {
-            background-color: #dc3545;
-        }
-        .mood-meter {
-            height: 40px;
-            background: linear-gradient(to right, #dc3545, #ffc107, #28a745);
-            border-radius: 20px;
-            position: relative;
-            margin-bottom: 1rem;
-        }
-        .mood-marker {
-            width: 20px;
-            height: 40px;
-            background-color: #fff;
-            border: 2px solid #000;
-            border-radius: 10px;
-            position: absolute;
-            top: 0;
-            transform: translateX(-50%);
         }
     </style>
 </head>
@@ -90,10 +56,10 @@
 
     <div class="container my-4">
         <div class="row">
-            <div class="col-md-8">
+            <div class="col-md-12">
                 <div class="card mb-4">
                     <div class="card-header">
-                        <h5 class="mb-0">Chat with MHM Assistant</h5>
+                        <h5 class="mb-0">Chat with MindfulMentor</h5>
                     </div>
                     <div class="card-body">
                         <div class="chat-container" id="chatBox">
@@ -108,44 +74,15 @@
                     </div>
                 </div>
             </div>
-            <div class="col-md-4">
-                <div class="card mb-4">
-                    <div class="card-header">
-                        <h5 class="mb-0">Current Mood</h5>
-                    </div>
-                    <div class="card-body">
-                        <div class="mood-meter">
-                            <div class="mood-marker" id="moodMarker" style="left: 50%;"></div>
-                        </div>
-                        <div class="d-flex justify-content-between">
-                            <small>Negative</small>
-                            <small>Neutral</small>
-                            <small>Positive</small>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="card">
-                    <div class="card-header">
-                        <h5 class="mb-0">Your Sentiment History</h5>
-                    </div>
-                    <div class="card-body">
-                        <canvas id="sentimentChart"></canvas>
-                    </div>
-                </div>
-            </div>
         </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const chatBox = document.getElementById('chatBox');
             const messageInput = document.getElementById('messageInput');
             const sendBtn = document.getElementById('sendBtn');
-            const moodMarker = document.getElementById('moodMarker');
-            let currentMoodScore = 5; // Default neutral
             
             // Load chat history
             loadChatHistory();
@@ -179,13 +116,7 @@
                 .then(response => response.json())
                 .then(data => {
                     // Add bot response to chat
-                    addMessage(data.response, 'bot', data.sentiment);
-                    
-                    // Update mood meter
-                    updateMoodMeter(data.score);
-                    
-                    // Update sentiment chart
-                    updateSentimentChart();
+                    addMessage(data.response, 'bot');
                 })
                 .catch(error => {
                     console.error('Error:', error);
@@ -193,28 +124,14 @@
                 });
             }
             
-            function addMessage(text, sender, sentiment = null) {
+            function addMessage(text, sender) {
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `message ${sender}-message`;
-                
-                if (sender === 'bot' && sentiment) {
-                    const sentimentIndicator = document.createElement('span');
-                    sentimentIndicator.className = `sentiment-indicator sentiment-${sentiment}`;
-                    messageDiv.appendChild(sentimentIndicator);
-                }
-                
                 messageDiv.appendChild(document.createTextNode(text));
                 chatBox.appendChild(messageDiv);
                 
                 // Scroll to bottom
                 chatBox.scrollTop = chatBox.scrollHeight;
-            }
-            
-            function updateMoodMeter(score) {
-                currentMoodScore = score;
-                // Position the marker (0-10 score to 0-100%)
-                const position = score * 10;
-                moodMarker.style.left = `${position}%`;
             }
             
             function loadChatHistory() {
@@ -231,117 +148,11 @@
                     const recentMessages = data.slice(-10);
                     recentMessages.forEach(chat => {
                         addMessage(chat.student_message, 'user');
-                        addMessage(chat.chatbot_response, 'bot', chat.sentiment);
+                        addMessage(chat.chatbot_response, 'bot');
                     });
-                    
-                    // If there's history, update mood marker
-                    if (recentMessages.length > 0) {
-                        updateMoodMeter(recentMessages[recentMessages.length - 1].sentiment_score);
-                    }
-                    
-                    // Initialize sentiment chart
-                    initSentimentChart(data);
                 })
                 .catch(error => {
                     console.error('Error loading history:', error);
-                });
-            }
-            
-            function initSentimentChart(data) {
-                // Group data by day and calculate average sentiment
-                const dateGroups = {};
-                data.forEach(item => {
-                    const date = item.timestamp.split(' ')[0]; // Extract date part
-                    if (!dateGroups[date]) {
-                        dateGroups[date] = [];
-                    }
-                    dateGroups[date].push(item.sentiment_score);
-                });
-                
-                const labels = [];
-                const sentimentData = [];
-                
-                for (const date in dateGroups) {
-                    labels.push(date);
-                    const scores = dateGroups[date];
-                    const average = scores.reduce((a, b) => a + b, 0) / scores.length;
-                    sentimentData.push(average);
-                }
-                
-                // Create chart
-                const ctx = document.getElementById('sentimentChart').getContext('2d');
-                window.sentimentChart = new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            label: 'Mood Score',
-                            data: sentimentData,
-                            backgroundColor: 'rgba(54, 162, 235, 0.2)',
-                            borderColor: 'rgba(54, 162, 235, 1)',
-                            borderWidth: 2,
-                            tension: 0.3
-                        }]
-                    },
-                    options: {
-                        scales: {
-                            y: {
-                                beginAtZero: true,
-                                max: 10,
-                                title: {
-                                    display: true,
-                                    text: 'Mood Score'
-                                }
-                            },
-                            x: {
-                                title: {
-                                    display: true,
-                                    text: 'Date'
-                                }
-                            }
-                        },
-                        plugins: {
-                            title: {
-                                display: true,
-                                text: 'Mood Trend'
-                            }
-                        }
-                    }
-                });
-            }
-            
-            function updateSentimentChart() {
-                // Fetch updated history for chart
-                fetch('/api/student/history')
-                .then(response => response.json())
-                .then(data => {
-                    // Group data by day and calculate average sentiment
-                    const dateGroups = {};
-                    data.forEach(item => {
-                        const date = item.timestamp.split(' ')[0]; // Extract date part
-                        if (!dateGroups[date]) {
-                            dateGroups[date] = [];
-                        }
-                        dateGroups[date].push(item.sentiment_score);
-                    });
-                    
-                    const labels = [];
-                    const sentimentData = [];
-                    
-                    for (const date in dateGroups) {
-                        labels.push(date);
-                        const scores = dateGroups[date];
-                        const average = scores.reduce((a, b) => a + b, 0) / scores.length;
-                        sentimentData.push(average);
-                    }
-                    
-                    // Update chart data
-                    window.sentimentChart.data.labels = labels;
-                    window.sentimentChart.data.datasets[0].data = sentimentData;
-                    window.sentimentChart.update();
-                })
-                .catch(error => {
-                    console.error('Error updating chart:', error);
                 });
             }
         });

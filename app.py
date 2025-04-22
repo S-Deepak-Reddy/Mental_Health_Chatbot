@@ -14,6 +14,10 @@ from dotenv import load_dotenv
 import pandas as pd
 from sklearn.model_selection import train_test_split
 import time
+import hashlib
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # Load environment variables from .env file
 load_dotenv()
@@ -42,7 +46,68 @@ FINETUNED_MODEL_NAME = os.getenv("FINETUNED_MODEL_NAME", None)  # Will store the
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "togethercomputer/m2-bert-80M-8k-retrieval")
 FINETUNE_DATASET_PATH = os.getenv("FINETUNE_DATASET_PATH", "./finetune_data.jsonl")
 FINETUNE_STATUS_CHECK_INTERVAL = 60  # seconds
+# Add SMTP configuration
+SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+EMAIL_USER = os.getenv("EMAIL_USER", "your-email@gmail.com")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "your-app-password")
 
+# Add password hashing function
+def hash_password(password):
+    """Hash a password for storing"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# Add email sending function
+def send_alert_email(student_data, sentiment_score, message):
+    """Send an email alert to faculty when a student's sentiment is very low"""
+    try:
+        # Get the faculty email from the student's proctor field
+        faculty_ref = db.collection('faculty').where('name', '==', student_data['proctor']).limit(1).get()
+        
+        if not faculty_ref:
+            print(f"Faculty not found for proctor: {student_data['proctor']}")
+            return False
+        
+        faculty_email = faculty_ref[0].to_dict().get('email')
+        
+        if not faculty_email:
+            print("Faculty email not found")
+            return False
+        
+        # Create email
+        msg = MIMEMultipart()
+        msg['From'] = EMAIL_USER
+        msg['To'] = faculty_email
+        msg['Subject'] = f"ALERT: Student {student_data['name']} needs attention"
+        
+        body = f"""
+        Dear {student_data['proctor']},
+        
+        Our system has detected that your student {student_data['name']} is showing 
+        signs of distress with a very low sentiment score of {sentiment_score}.
+        
+        Their recent message was: "{message}"
+        
+        Please consider reaching out to them as soon as possible.
+        
+        Best regards,
+        Mental Health Monitor System
+        """
+        
+        msg.attach(MIMEText(body, 'plain'))
+        
+        # Connect to server and send email
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(EMAIL_USER, EMAIL_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        
+        return True
+    except Exception as e:
+        print(f"Error sending email alert: {e}")
+        return False
+    
 # Create custom embedding function using Together AI
 class TogetherAIEmbeddings(embedding_functions.EmbeddingFunction):
     def __init__(self, api_key, model):
@@ -266,31 +331,41 @@ def index():
 def login():
     if request.method == 'POST':
         email = request.form.get('email')
+        password = request.form.get('password')  # New field
         user_type = request.form.get('user_type')
         
+        # Hash the password for comparison
+        hashed_password = hash_password(password)
+        
         if user_type == 'student':
-            # Check if student exists
+            # Check if student exists with matching password
             students_ref = db.collection('students')
             query = students_ref.where('email', '==', email).limit(1).get()
             
             if len(query) > 0:
                 student = query[0].to_dict()
-                session['user'] = student
-                session['user_type'] = 'student'
-                return redirect(url_for('student_dashboard'))
+                if student.get('password') == hashed_password:
+                    session['user'] = student
+                    session['user_type'] = 'student'
+                    return redirect(url_for('student_dashboard'))
+                else:
+                    return render_template('login.html', error="Invalid password")
             else:
                 return render_template('login.html', error="Student not found")
                 
         elif user_type == 'faculty':
-            # Check if faculty exists
+            # Check if faculty exists with matching password
             faculty_ref = db.collection('faculty')
             query = faculty_ref.where('email', '==', email).limit(1).get()
             
             if len(query) > 0:
                 faculty = query[0].to_dict()
-                session['user'] = faculty
-                session['user_type'] = 'faculty'
-                return redirect(url_for('faculty_dashboard'))
+                if faculty.get('password') == hashed_password:
+                    session['user'] = faculty
+                    session['user_type'] = 'faculty'
+                    return redirect(url_for('faculty_dashboard'))
+                else:
+                    return render_template('login.html', error="Invalid password")
             else:
                 return render_template('login.html', error="Faculty not found")
     
@@ -301,11 +376,15 @@ def register():
     if request.method == 'POST':
         name = request.form.get('name')
         email = request.form.get('email')
+        password = request.form.get('password')  # New field
         age = request.form.get('age')
         gender = request.form.get('gender')
         class_section = request.form.get('class_section')
         proctor = request.form.get('proctor')
         user_type = request.form.get('user_type')
+        
+        # Hash the password
+        hashed_password = hash_password(password)
         
         if user_type == 'student':
             # Create student record
@@ -314,6 +393,7 @@ def register():
                 'student_id': student_id,
                 'name': name,
                 'email': email,
+                'password': hashed_password,  # Store hashed password
                 'age': age,
                 'gender': gender,
                 'class_section': class_section,
@@ -333,6 +413,7 @@ def register():
                 'faculty_id': faculty_id,
                 'name': name,
                 'email': email,
+                'password': hashed_password,  # Store hashed password
                 'created_at': datetime.now()
             }
             
@@ -355,16 +436,16 @@ def faculty_dashboard():
     if 'user' not in session or session['user_type'] != 'faculty':
         return redirect(url_for('login'))
     
-    # Get all students for monitoring
+    faculty_name = session['user']['name']
+    
+    # Get only students assigned to this faculty as proctor
     students = []
-    students_ref = db.collection('students').get()
+    students_ref = db.collection('students').where('proctor', '==', faculty_name).get()
     
     for student_doc in students_ref:
         student_data = student_doc.to_dict()
         
         # Get latest sentiment info
-        # FIXED: Create index for this query in Firebase console
-        # See error message for link to create the index
         chat_ref = db.collection('chat_history')\
             .where('student_id', '==', student_data['student_id'])\
             .order_by('timestamp', direction=firestore.Query.DESCENDING)\
@@ -418,7 +499,6 @@ def chat():
     db.collection('chat_history').add(chat_data)
     
     # Store in ChromaDB for contextual memory
-    # Ensure conversation_collection is defined before this call
     conversation_collection.add(
         documents=[f"User: {user_message}\nBot: {chatbot_response}"],
         metadatas=[{
@@ -430,10 +510,13 @@ def chat():
         ids=[f"{student_id}-{datetime.now().timestamp()}"]
     )
     
+    # Check if sentiment score is less than 1 and send alert email
+    if sentiment_result['score'] <= 2:
+        send_alert_email(student, sentiment_result['score'], user_message)
+    
+    # Return response without sentiment data for student dashboard
     return jsonify({
-        "response": chatbot_response,
-        "sentiment": sentiment_result['sentiment'],
-        "score": sentiment_result['score']
+        "response": chatbot_response
     })
 
 @app.route('/api/student/history')

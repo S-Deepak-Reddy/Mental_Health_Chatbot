@@ -6,15 +6,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Register - Mental Health Monitor</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        .register-container {
-            max-width: 600px;
-            margin: 2rem auto;
-            padding: 2rem;
-            border-radius: 10px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        }
-    </style>
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
@@ -28,88 +19,100 @@
                     <li class="nav-item">
                         <a class="nav-link" href="/login">Login</a>
                     </li>
-                    <li class="nav-item">
-                        <a class="nav-link active" href="/register">Register</a>
-                    </li>
                 </ul>
             </div>
         </div>
     </nav>
 
-    <div class="container">
-        <div class="register-container bg-light">
-            <h2 class="text-center mb-4">Register</h2>
-            
-            <form method="POST" action="/register">
-                <div class="mb-3">
-                    <label for="user_type" class="form-label">Register as:</label>
-                    <select class="form-select" id="user_type" name="user_type" onchange="toggleFields()">
-                        <option value="student" selected>Student</option>
-                        <option value="faculty">Faculty</option>
-                    </select>
-                </div>
-                
-                <div class="mb-3">
-                    <label for="name" class="form-label">Full Name</label>
-                    <input type="text" class="form-control" id="name" name="name" required>
-                </div>
-                
-                <div class="mb-3">
-                    <label for="email" class="form-label">Email address</label>
-                    <input type="email" class="form-control" id="email" name="email" required>
-                </div>
-                
-                <div id="student-fields">
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label for="age" class="form-label">Age</label>
-                            <input type="number" class="form-control" id="age" name="age">
-                        </div>
-                        
-                        <div class="col-md-6 mb-3">
-                            <label for="gender" class="form-label">Gender</label>
-                            <select class="form-select" id="gender" name="gender">
-                                <option value="Male">Male</option>
-                                <option value="Female">Female</option>
-                                <option value="Other">Other</option>
-                                <option value="Prefer not to say">Prefer not to say</option>
-                            </select>
-                        </div>
+    <div class="container mt-5">
+        <div class="row justify-content-center">
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="mb-0">Register</h3>
                     </div>
-                    
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label for="class_section" class="form-label">Class/Section</label>
-                            <input type="text" class="form-control" id="class_section" name="class_section">
-                        </div>
-                        
-                        <div class="col-md-6 mb-3">
-                            <label for="proctor" class="form-label">Proctor Name</label>
-                            <input type="text" class="form-control" id="proctor" name="proctor">
-                        </div>
+                    <div class="card-body">
+                        <form method="POST">
+                            <div class="mb-3">
+                                <label for="user_type" class="form-label">Register as</label>
+                                <div>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input" type="radio" name="user_type" id="student_type" value="student" checked onchange="toggleFields()">
+                                        <label class="form-check-label" for="student_type">Student</label>
+                                    </div>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input" type="radio" name="user_type" id="faculty_type" value="faculty" onchange="toggleFields()">
+                                        <label class="form-check-label" for="faculty_type">Faculty</label>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="name" class="form-label">Full Name</label>
+                                <input type="text" class="form-control" id="name" name="name" required>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="email" class="form-label">Email</label>
+                                <input type="email" class="form-control" id="email" name="email" required>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="password" class="form-label">Password</label>
+                                <input type="password" class="form-control" id="password" name="password" required>
+                            </div>
+                            
+                            <div id="student_fields">
+                                <div class="mb-3">
+                                    <label for="age" class="form-label">Age</label>
+                                    <input type="number" class="form-control" id="age" name="age">
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label for="gender" class="form-label">Gender</label>
+                                    <select class="form-select" id="gender" name="gender">
+                                        <option value="">Choose...</option>
+                                        <option value="Male">Male</option>
+                                        <option value="Female">Female</option>
+                                        <option value="Non-binary">Non-binary</option>
+                                        <option value="Prefer not to say">Prefer not to say</option>
+                                    </select>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label for="class_section" class="form-label">Class/Section</label>
+                                    <input type="text" class="form-control" id="class_section" name="class_section">
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label for="proctor" class="form-label">Faculty Proctor</label>
+                                    <input type="text" class="form-control" id="proctor" name="proctor">
+                                </div>
+                            </div>
+                            
+                            <button type="submit" class="btn btn-primary">Register</button>
+                        </form>
                     </div>
                 </div>
-                
-                <button type="submit" class="btn btn-primary w-100 mt-2">Register</button>
-            </form>
-            <div class="text-center mt-3">
-                <p>Already have an account? <a href="/login">Login here</a></p>
             </div>
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         function toggleFields() {
-            const userType = document.getElementById('user_type').value;
-            const studentFields = document.getElementById('student-fields');
+            const studentFields = document.getElementById('student_fields');
+            const facultyType = document.getElementById('faculty_type');
             
-            if (userType === 'student') {
-                studentFields.style.display = 'block';
-            } else {
+            if (facultyType.checked) {
                 studentFields.style.display = 'none';
+            } else {
+                studentFields.style.display = 'block';
             }
         }
+        
+        // Call on page load
+        document.addEventListener('DOMContentLoaded', toggleFields);
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
