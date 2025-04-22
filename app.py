@@ -11,6 +11,9 @@ import chromadb
 from chromadb.utils import embedding_functions
 import chromadb.db.base
 from dotenv import load_dotenv
+import pandas as pd
+from sklearn.model_selection import train_test_split
+import time
 
 # Load environment variables from .env file
 load_dotenv()
@@ -33,11 +36,14 @@ chroma_client = chromadb.PersistentClient(chroma_path)
 TOGETHER_API_KEY = os.getenv("TOGETHER_API_KEY")
 TOGETHER_API_URL = os.getenv("TOGETHER_API_URL", "https://api.together.xyz/v1/completions")
 TOGETHER_EMBEDDING_URL = "https://api.together.xyz/v1/embeddings"
+TOGETHER_FINETUNE_URL = "https://api.together.xyz/v1/fine-tunes"
 MODEL_NAME = os.getenv("LLM_MODEL", "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free")
+FINETUNED_MODEL_NAME = os.getenv("FINETUNED_MODEL_NAME", None)  # Will store the finetuned model name
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "togethercomputer/m2-bert-80M-8k-retrieval")
+FINETUNE_DATASET_PATH = os.getenv("FINETUNE_DATASET_PATH", "./finetune_data.jsonl")
+FINETUNE_STATUS_CHECK_INTERVAL = 60  # seconds
 
 # Create custom embedding function using Together AI
-# Change your TogetherAIEmbeddings class to use 'input' instead of 'texts'
 class TogetherAIEmbeddings(embedding_functions.EmbeddingFunction):
     def __init__(self, api_key, model):
         self.api_key = api_key
@@ -64,11 +70,11 @@ class TogetherAIEmbeddings(embedding_functions.EmbeddingFunction):
             print(f"Error from Together API Embeddings: {response.text}")
             # Return zero vectors with dimension 768 (standard for embedding models)
             return [[0.0] * 768 for _ in range(len(input))]
+
 # Initialize Together AI embedding function
 together_embeddings = TogetherAIEmbeddings(TOGETHER_API_KEY, EMBEDDING_MODEL)
 
 # Create or get collection for storing conversation history
-# Uncomment this block to use ChromaDB
 try:
     conversation_collection = chroma_client.create_collection(
         name="conversations", 
@@ -114,40 +120,142 @@ def analyze_sentiment(text):
         "presence_penalty": 0
     }
     
-    response = requests.post(TOGETHER_API_URL, headers=headers, json=data)
+    try:
+        response = requests.post(TOGETHER_API_URL, headers=headers, json=data)
+        
+        if response.status_code == 200:
+            result = response.json()
+            try:
+                # Extract JSON from the model's response
+                json_str = result["choices"][0]["text"].strip()
+                # Find JSON pattern in the text
+                import re
+                json_match = re.search(r'\{.*\}', json_str, re.DOTALL)
+                if json_match:
+                    sentiment_data = json.loads(json_match.group(0))
+                    # Ensure all required keys exist
+                    if "sentiment" not in sentiment_data:
+                        sentiment_data["sentiment"] = "neutral"
+                    if "score" not in sentiment_data:
+                        sentiment_data["score"] = 5.0
+                    if "raw_score" not in sentiment_data:
+                        sentiment_data["raw_score"] = 0.5
+                    return sentiment_data
+            except (json.JSONDecodeError, KeyError, IndexError) as e:
+                print(f"Error parsing sentiment response: {e}")
+    except Exception as e:
+        print(f"Error in sentiment API request: {e}")
     
-    if response.status_code == 200:
-        result = response.json()
-        try:
-            # Extract JSON from the model's response
-            json_str = result["choices"][0]["text"].strip()
-            # Find JSON pattern in the text
-            import re
-            json_match = re.search(r'\{.*\}', json_str, re.DOTALL)
-            if json_match:
-                sentiment_data = json.loads(json_match.group(0))
-                return sentiment_data
-            else:
-                # Fallback if JSON extraction fails
-                return {
-                    "score": 5.0,
-                    "sentiment": "neutral",
-                    "raw_score": 0.5
-                }
-        except (json.JSONDecodeError, KeyError) as e:
-            print(f"Error parsing sentiment response: {e}")
-            return {
-                "score": 5.0,
-                "sentiment": "neutral",
-                "raw_score": 0.5
+    # Default return if anything fails
+    return {
+        "score": 5.0,
+        "sentiment": "neutral",
+        "raw_score": 0.5
+    }
+def prepare_finetune_data():
+    """Create a dataset for finetuning from chat history"""
+    try:
+        # Get all chat history
+        chat_ref = db.collection('chat_history').get()
+        
+        data = []
+        for doc in chat_ref:
+            chat = doc.to_dict()
+            
+            # Create an instruction-response pair in the format Together.ai expects
+            entry = {
+                "text": f"[INST] You are MindfulMentor, a supportive mental health chatbot for students.\n\nStudent message: {chat['student_message']}\nSentiment: {chat['sentiment']}\n\nProvide an empathetic and supportive response: [/INST] {chat['chatbot_response']}"
             }
-    else:
-        print(f"Error from Together API: {response.text}")
-        return {
-            "score": 5.0,
-            "sentiment": "neutral",
-            "raw_score": 0.5
+            data.append(entry)
+        
+        # Save as JSONL file
+        with open(FINETUNE_DATASET_PATH, 'w') as f:
+            for item in data:
+                f.write(json.dumps(item) + '\n')
+                
+        return len(data)
+    except Exception as e:
+        print(f"Error preparing finetune data: {e}")
+        return 0
+
+def start_finetuning():
+    """Start the finetuning process with Together AI"""
+    global FINETUNED_MODEL_NAME
+    
+    if not os.path.exists(FINETUNE_DATASET_PATH):
+        records = prepare_finetune_data()
+        if records == 0:
+            return {"error": "No training data available"}
+    
+    # Upload dataset
+    files = {'file': open(FINETUNE_DATASET_PATH, 'rb')}
+    headers = {"Authorization": f"Bearer {TOGETHER_API_KEY}"}
+    
+    upload_response = requests.post(
+        "https://api.together.xyz/v1/files/upload",
+        headers=headers,
+        files=files
+    )
+    
+    if upload_response.status_code != 200:
+        return {"error": f"Failed to upload training data: {upload_response.text}"}
+    
+    file_id = upload_response.json()["id"]
+    
+    # Start finetuning job
+    headers = {
+        "Authorization": f"Bearer {TOGETHER_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    finetune_data = {
+        "training_file": file_id,
+        "model": MODEL_NAME,
+        "suffix": f"mindfulmentor-{int(time.time())}",
+        "hyperparameters": {
+            "epochs": 3,
+            "batch_size": 4,
+            "learning_rate_multiplier": 2.0
         }
+    }
+    
+    finetune_response = requests.post(
+        TOGETHER_FINETUNE_URL,
+        headers=headers,
+        json=finetune_data
+    )
+    
+    if finetune_response.status_code != 200:
+        return {"error": f"Failed to start finetuning: {finetune_response.text}"}
+    
+    job_id = finetune_response.json()["id"]
+    
+    return {"status": "success", "job_id": job_id}
+
+def check_finetune_status(job_id):
+    """Check the status of a finetuning job"""
+    headers = {"Authorization": f"Bearer {TOGETHER_API_KEY}"}
+    
+    response = requests.get(
+        f"{TOGETHER_FINETUNE_URL}/{job_id}",
+        headers=headers
+    )
+    
+    if response.status_code != 200:
+        return {"error": f"Failed to check status: {response.text}"}
+    
+    status_data = response.json()
+    
+    # If complete, update the model name
+    if status_data["status"] == "succeeded":
+        global FINETUNED_MODEL_NAME
+        FINETUNED_MODEL_NAME = status_data["fine_tuned_model"]
+        
+        # Save to environment or database
+        with open(".env", "a") as f:
+            f.write(f"\nFINETUNED_MODEL_NAME={FINETUNED_MODEL_NAME}")
+    
+    return status_data
 
 # Routes
 @app.route('/')
@@ -415,6 +523,30 @@ def get_student_data():
     
     return jsonify(result)
 
+@app.route('/api/faculty/finetune', methods=['POST'])
+def finetune_model():
+    if 'user' not in session or session['user_type'] != 'faculty':
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    result = start_finetuning()
+    
+    if "error" in result:
+        return jsonify(result), 400
+    
+    return jsonify(result)
+
+@app.route('/api/faculty/finetune_status/<job_id>')
+def finetune_status(job_id):
+    if 'user' not in session or session['user_type'] != 'faculty':
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    status = check_finetune_status(job_id)
+    
+    if "error" in status:
+        return jsonify(status), 400
+    
+    return jsonify(status)
+
 def generate_response_with_memory(user_message, sentiment_result, student):
     """Generate an appropriate response using Together AI and conversation memory from ChromaDB"""
     
@@ -453,35 +585,61 @@ def generate_response_with_memory(user_message, sentiment_result, student):
         
         # Build the prompt for the LLM
         prompt = f"""
-        [INST] You are a supportive mental health chatbot for students. Your name is MindfulMentor. 
-        Your role is to provide empathetic responses and support for the student you're talking to.
-        
+        [INST] You are a supportive mental health chatbot for college students. Your name is MindfulMentor. 
+        Your role is to provide empathetic responses that directly address what the student has said.
+
         Student Profile:
         - Name: {student['name']} (use their first name: {name})
         - Age: {student['age']}
         - Gender: {student['gender']}
-        
+
         Current Sentiment Analysis:
         - Score: {sentiment_result['score']}/10
         - Category: {sentiment_result['sentiment']}
-        
+
         Conversation History:
         {conversation_history}
-        
+
         Recent Sentiment Trend: {', '.join(sentiment_trend[:3]) if sentiment_trend else 'No history'}
         Concern Level: {concern_level}
-        
+
         The student just said: "{user_message}"
+
+        CRITICAL RESPONSE GUIDELINES:
+        1. Focus exclusively on the exact content of what they said - no generic responses
+        2. NO QUESTIONS - do not include any questions in your response
+        3. NO references to campus services, counselors, advisors unless they specifically ask
+        4. Provide direct, practical advice they can use immediately
+        5. Keep your response brief (2-3 sentences maximum)
+        6. If they mention exams: suggest quick study techniques
+        7. If they mention money: offer practical budget tips
+        8. If they mention relationships: validate their feelings
+        9. Use varied sentence structures and avoid repetitive phrasing
+        10. Never use phrases like "I understand" or "I'm here to listen"
+        11. If they express suicidal thoughts or self-harm, respond with: "I'm really sorry to hear that you're feeling this way. It's really important that you talk to someone who can help you, like a mental health professional or a trusted person in your life."
+        12. If they express serious emotional distress, suggest they reach out to a trusted friend or family member for support.
+        13. If they express academic stress, suggest practical study techniques or time management tips.
+        14. If they express financial concerns, suggest practical budgeting tips or campus resources.
+        15. If they express relationship issues, validate their feelings and suggest talking to a trusted friend or counselor.
+        16. If they express general stress or anxiety, suggest practical coping strategies like mindfulness or exercise.
+        17. If they express feelings of loneliness, suggest reaching out to friends or joining campus activities.
+        18. If they express feelings of being overwhelmed, suggest breaking tasks into smaller steps or seeking support from friends.
+        19. If they express feelings of burnout, suggest taking breaks and practicing self-care.
+        20. If they express feelings of sadness or depression, suggest talking to a trusted friend or family member.
+        21. If they express feelings of anger or frustration, suggest finding healthy outlets for those feelings, like exercise or creative activities.
+        22. If they express feelings of confusion or uncertainty, suggest talking to a trusted friend or family member for support.
+        23. If they express feelings of hopelessness, suggest reaching out to a trusted friend or family member for support.
+        24. If they express feelings of fear or anxiety, suggest practical coping strategies like mindfulness or exercise.
+        25. If they express feelings of isolation, suggest reaching out to friends or joining campus activities.
+        26. If they express feelings of being lost or directionless, suggest talking to a trusted friend or family member for support.
+        27. If they express feelings of being overwhelmed by responsibilities, suggest breaking tasks into smaller steps or seeking support from friends.
+        28. If they express feelings of being overwhelmed by academic pressure, suggest practical study techniques or time management tips.
+        29. If they express feelings of being overwhelmed by social pressure, suggest reaching out to friends or joining campus activities.
+        30. If they express feelings of being overwhelmed by family expectations, suggest talking to a trusted friend or family member for support.
         
-        Please respond in an empathetic, supportive way that:
-        1. Acknowledges their current emotion
-        2. Provides appropriate support or guidance
-        3. Asks a thoughtful follow-up question if appropriate
-        4. Keeps your response concise (2-4 sentences)
-        5. Avoids being overly clinical or using psychological jargon
-        6. Never suggests you are an AI or language model
-        
-        If they express serious mental health concerns, encourage seeking professional help from school counselors.
+        If they express serious mental health concerns, encourage seeking professional help from campus counseling services.
+
+        ONLY return the final response without any explanations.
         [/INST]
         """
         
@@ -490,8 +648,11 @@ def generate_response_with_memory(user_message, sentiment_result, student):
             "Content-Type": "application/json"
         }
         
+        # Use finetuned model if available, otherwise use base model
+        model_to_use = FINETUNED_MODEL_NAME if FINETUNED_MODEL_NAME else MODEL_NAME
+        
         data = {
-            "model": MODEL_NAME,
+            "model": model_to_use,
             "prompt": prompt,
             "max_tokens": 200,
             "temperature": 0.7,
@@ -505,26 +666,66 @@ def generate_response_with_memory(user_message, sentiment_result, student):
         
         if response.status_code == 200:
             result = response.json()
-            return result["choices"][0]["text"].strip()
+            raw_response = result["choices"][0]["text"].strip()
+
+            # More robust response cleaning
+            # Pattern 1: Take everything before [/MSG], [/INST], etc.
+            clean_response = raw_response.split("[/")[0].strip()
+            
+            # Pattern 2: Remove any content after "```" (model explanations)
+            if "```" in clean_response:
+                clean_response = clean_response.split("```")[0].strip()
+                
+            # Pattern 3: Remove any content after "##" (step headings)
+            if "##" in clean_response:
+                clean_response = clean_response.split("##")[0].strip()
+            
+            return clean_response
         else:
             # If API call fails, use simplified prompt for fallback
             return generate_fallback_response(user_message, sentiment_result, name)
     except Exception as e:
         print(f"Error generating response: {e}")
         return generate_fallback_response(user_message, sentiment_result, name)
-
+    
 def generate_fallback_response(user_message, sentiment_result, name):
     """Generate a fallback response using LLM with a simpler prompt if main call fails"""
     try:
+        # College-specific keyword groups
+        exam_keywords = ["exam", "test", "study", "finals", "midterm", "quiz", "assignment", "paper", "project", "deadline", "grade"]
+        stress_keywords = ["stress", "anxious", "nervous", "worried", "scared", "overwhelmed", "burnout", "pressure"]
+        social_keywords = ["roommate", "friend", "relationship", "party", "club", "organization", "greek", "dorm", "housing"]
+        career_keywords = ["internship", "job", "interview", "resume", "career", "future", "graduate", "major", "minor"]
+        
+        # Check for specific concerns
+        has_exam_concern = any(keyword in user_message.lower() for keyword in exam_keywords)
+        has_stress_concern = any(keyword in user_message.lower() for keyword in stress_keywords)
+        has_social_concern = any(keyword in user_message.lower() for keyword in social_keywords)
+        has_career_concern = any(keyword in user_message.lower() for keyword in career_keywords)
+        
+        # Create context-specific prompt
+        context_note = ""
+        if has_exam_concern:
+            context_note = "The student is concerned about academics or exams. Provide specific college study strategies or time management advice."
+        elif has_stress_concern:
+            context_note = "The student is expressing stress or anxiety about college life. Offer specific coping strategies for academic pressure."
+        elif has_social_concern:
+            context_note = "The student is dealing with social aspects of college. Provide advice on navigating campus relationships."
+        elif has_career_concern:
+            context_note = "The student is worried about career or future planning. Offer guidance on using college resources for career development."
+        
         # Simplified prompt for fallback
         simple_prompt = f"""
-        [INST] You are a supportive mental health chatbot. Respond to this student message:
+        [INST] You are a supportive mental health chatbot for college students. Respond to this student message:
         
         Student {name} said: "{user_message}"
         
         Their current sentiment is: {sentiment_result['sentiment']}
+        {context_note}
         
-        Reply with a brief supportive message (2-3 sentences):
+        Reply with a brief, specific response that addresses their college-related concerns.
+        Provide practical advice or support relevant to university life.
+        Keep it to 2-3 concise sentences and avoid generic platitudes.
         [/INST]
         """
         
@@ -533,34 +734,42 @@ def generate_fallback_response(user_message, sentiment_result, name):
             "Content-Type": "application/json"
         }
         
+        # Use finetuned model if available, otherwise use base model
+        model_to_use = FINETUNED_MODEL_NAME if FINETUNED_MODEL_NAME else MODEL_NAME
+        
         data = {
-            "model": MODEL_NAME,
+            "model": model_to_use,
             "prompt": simple_prompt,
             "max_tokens": 100,
             "temperature": 0.7,
             "top_p": 0.9,
-            "frequency_penalty": 0.5,
-            "presence_penalty": 0.5
+            "frequency_penalty": 0.7,
+            "presence_penalty": 0.7
         }
         
         response = requests.post(TOGETHER_API_URL, headers=headers, json=data)
         
         if response.status_code == 200:
             result = response.json()
-            return result["choices"][0]["text"].strip()
+            raw_response = result["choices"][0]["text"].strip()
+            
+            # Clean up response to remove instruction tokens
+            clean_response = raw_response.split("[/")[0].strip()
+            clean_response = clean_response.split("[INST]")[0].strip()
+            
+            return clean_response
         else:
             print(f"Fallback response failed with status {response.status_code}")
             # Ultimate fallback if even the simplified prompt fails
             message_type = sentiment_result['sentiment']
             if message_type == 'negative':
-                return f"I understand this is difficult, {name}. Would you like to share more about what you're experiencing?"
+                return f"I understand college can be difficult, {name}. Consider talking to your academic advisor or campus counseling services if you're feeling overwhelmed."
             elif message_type == 'neutral':
-                return f"Thanks for sharing, {name}. How else have you been feeling lately?"
+                return f"College life has its ups and downs, {name}. Remember that your university offers resources to help you navigate these challenges."
             else:
-                return f"That's wonderful to hear, {name}! What else has been going well for you?"
+                return f"That's great to hear, {name}! Building on positive experiences is an important part of having a fulfilling college experience."
     except Exception as e:
         print(f"Error in fallback response: {e}")
-        return f"I'm here to listen, {name}. Would you like to tell me more about how you're feeling?"
-
+        return f"College can be challenging, {name}. Consider checking in with your campus counseling services if you need additional support."    
 if __name__ == '__main__':
     app.run(debug=True)
